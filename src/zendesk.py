@@ -19,16 +19,24 @@ ZENDESK_EMAIL = os.getenv("ZENDESK_EMAIL")
 ZENDESK_API_TOKEN = os.getenv("ZENDESK_API_TOKEN")
 ZENDESK_GROUP_ID = os.getenv("ZENDESK_GROUP_ID", "")
 
-# Build API base URL
-API_BASE = f"https://{ZENDESK_SUBDOMAIN}.zendesk.com/api/v2"
-
-# Authentication
-auth = (f"{ZENDESK_EMAIL}/token", ZENDESK_API_TOKEN)
-
 # Request headers
 headers = {
     "Content-Type": "application/json"
 }
+
+
+def _get_zendesk_config():
+    """Validate required Zendesk environment and return base URL + auth."""
+    if not ZENDESK_SUBDOMAIN:
+        raise ValueError("ZENDESK_SUBDOMAIN environment variable not set")
+    if not ZENDESK_EMAIL:
+        raise ValueError("ZENDESK_EMAIL environment variable not set")
+    if not ZENDESK_API_TOKEN:
+        raise ValueError("ZENDESK_API_TOKEN environment variable not set")
+
+    api_base = f"https://{ZENDESK_SUBDOMAIN}.zendesk.com/api/v2"
+    auth = (f"{ZENDESK_EMAIL}/token", ZENDESK_API_TOKEN)
+    return api_base, auth
 
 
 # SLE to Zendesk Priority Mapping
@@ -88,7 +96,8 @@ def create_ticket(ap_id, sle, severity="high", description=""):
     logger.info(f"Creating Zendesk ticket for AP {ap_id}, SLE: {sle}")
     
     try:
-        url = f"{API_BASE}/tickets.json"
+        api_base, auth = _get_zendesk_config()
+        url = f"{api_base}/tickets.json"
         response = requests.post(url, auth=auth, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         
@@ -132,7 +141,8 @@ def update_ticket(ticket_id, comment, status=None, priority=None, tags=None):
     logger.info(f"Updating Zendesk ticket #{ticket_id}")
     
     try:
-        url = f"{API_BASE}/tickets/{ticket_id}.json"
+        api_base, auth = _get_zendesk_config()
+        url = f"{api_base}/tickets/{ticket_id}.json"
         response = requests.put(url, auth=auth, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         
@@ -176,7 +186,8 @@ def close_ticket(ticket_id, resolution_comment):
     logger.info(f"Closing Zendesk ticket #{ticket_id}")
     
     try:
-        url = f"{API_BASE}/tickets/{ticket_id}.json"
+        api_base, auth = _get_zendesk_config()
+        url = f"{api_base}/tickets/{ticket_id}.json"
         response = requests.put(url, auth=auth, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
         
@@ -200,7 +211,8 @@ def get_ticket(ticket_id):
     logger.info(f"Fetching Zendesk ticket #{ticket_id}")
     
     try:
-        url = f"{API_BASE}/tickets/{ticket_id}.json"
+        api_base, auth = _get_zendesk_config()
+        url = f"{api_base}/tickets/{ticket_id}.json"
         response = requests.get(url, auth=auth, headers=headers, timeout=30)
         response.raise_for_status()
         return response.json()

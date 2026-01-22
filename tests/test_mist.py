@@ -13,6 +13,17 @@ from mist import get_ap_stats, reboot_ap, get_sle_metrics
 
 
 class TestMistClient(unittest.TestCase):
+
+    def setUp(self):
+        # Provide dummy env vars so config validation passes during tests
+        self.env_patcher = patch.dict(os.environ, {
+            "MIST_API_TOKEN": "TEST_TOKEN",
+            "SITE_ID": "TEST_SITE"
+        })
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
     
     @patch('mist.requests.get')
     def test_get_ap_stats_success(self, mock_get):

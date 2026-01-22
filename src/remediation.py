@@ -8,17 +8,19 @@ import logging
 import time
 from datetime import datetime
 from mist import reboot_ap, get_client_count, get_ap_stats, validate_credentials
+from logic import get_guardrails_config, check_business_hours
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Guardrails Configuration
-GUARDRAILS = {
-    "min_clients": 3,  # Minimum client count before remediation
-    "min_reboot_interval": 1800,  # Minimum seconds between reboots (30 minutes)
-    "max_daily_reboots": 3  # Maximum reboots per AP per day
+# Default guardrails in case rules file is missing
+DEFAULT_GUARDRAILS = {
+    "min_clients": 3,
+    "min_reboot_interval": 1800,
+    "max_daily_reboots": 3,
+    "business_hours_only": False,
 }
 
 
@@ -35,10 +37,19 @@ def check_guardrails(ap_id):
     logger.info(f"Checking guardrails for AP {ap_id}")
     
     try:
+        guardrails = get_guardrails_config() or DEFAULT_GUARDRAILS
+
+        # Optional business-hours enforcement
+        if guardrails.get("business_hours_only") and not check_business_hours():
+            reason = "Outside configured business hours"
+            logger.warning(f"Guardrail check failed: {reason}")
+            return False, reason
+
         # Check client count
         client_count = get_client_count(ap_id)
-        if client_count < GUARDRAILS["min_clients"]:
-            reason = f"Client count ({client_count}) below minimum threshold ({GUARDRAILS['min_clients']})"
+        min_clients = guardrails.get("min_clients", DEFAULT_GUARDRAILS["min_clients"])
+        if client_count < min_clients:
+            reason = f"Client count ({client_count}) below minimum threshold ({min_clients})"
             logger.warning(f"Guardrail check failed: {reason}")
             return False, reason
         
@@ -46,8 +57,9 @@ def check_guardrails(ap_id):
         ap_stats = get_ap_stats(ap_id)
         uptime = ap_stats.get("uptime", 0)
         
-        if uptime < GUARDRAILS["min_reboot_interval"]:
-            reason = f"AP uptime ({uptime}s) below minimum reboot interval ({GUARDRAILS['min_reboot_interval']}s)"
+        min_reboot_interval = guardrails.get("min_reboot_interval", DEFAULT_GUARDRAILS["min_reboot_interval"])
+        if uptime < min_reboot_interval:
+            reason = f"AP uptime ({uptime}s) below minimum reboot interval ({min_reboot_interval}s)"
             logger.warning(f"Guardrail check failed: {reason}")
             return False, reason
         

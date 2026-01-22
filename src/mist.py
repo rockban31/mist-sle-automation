@@ -12,14 +12,24 @@ logger = logging.getLogger(__name__)
 
 # Mist API Configuration
 API_BASE = "https://api.mist.com/api/v1"
-TOKEN = os.getenv("MIST_API_TOKEN")
-SITE_ID = os.getenv("SITE_ID")
 
-# Request headers
-headers = {
-    "Authorization": f"Token {TOKEN}",
-    "Content-Type": "application/json"
-}
+
+def _get_config():
+    """Fetch and validate Mist credentials from environment."""
+    token = os.getenv("MIST_API_TOKEN")
+    site_id = os.getenv("SITE_ID")
+    if not token:
+        raise ValueError("MIST_API_TOKEN environment variable not set")
+    if not site_id:
+        raise ValueError("SITE_ID environment variable not set")
+    return token, site_id
+
+
+def _get_headers(token):
+    return {
+        "Authorization": f"Token {token}",
+        "Content-Type": "application/json"
+    }
 
 
 def get_ap_stats(ap_id):
@@ -32,11 +42,12 @@ def get_ap_stats(ap_id):
     Returns:
         dict: AP statistics including health, clients, and performance metrics
     """
-    url = f"{API_BASE}/sites/{SITE_ID}/stats/aps/{ap_id}"
+    token, site_id = _get_config()
+    url = f"{API_BASE}/sites/{site_id}/stats/aps/{ap_id}"
     logger.info(f"Fetching AP stats for {ap_id}")
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=_get_headers(token), timeout=30)
         response.raise_for_status()
         logger.info(f"Successfully retrieved stats for AP {ap_id}")
         return response.json()
@@ -55,11 +66,12 @@ def get_ap_details(ap_id):
     Returns:
         dict: AP configuration and metadata
     """
-    url = f"{API_BASE}/sites/{SITE_ID}/devices/{ap_id}"
+    token, site_id = _get_config()
+    url = f"{API_BASE}/sites/{site_id}/devices/{ap_id}"
     logger.info(f"Fetching AP details for {ap_id}")
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=_get_headers(token), timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -77,11 +89,12 @@ def reboot_ap(ap_id):
     Returns:
         dict: Status of reboot command
     """
-    url = f"{API_BASE}/sites/{SITE_ID}/devices/{ap_id}/restart"
+    token, site_id = _get_config()
+    url = f"{API_BASE}/sites/{site_id}/devices/{ap_id}/restart"
     logger.warning(f"Issuing reboot command to AP {ap_id}")
     
     try:
-        response = requests.post(url, headers=headers, timeout=30)
+        response = requests.post(url, headers=_get_headers(token), timeout=30)
         response.raise_for_status()
         logger.info(f"Reboot command successfully issued to AP {ap_id}")
         return {"status": "reboot_issued", "ap_id": ap_id}
@@ -100,12 +113,13 @@ def get_sle_metrics(site_id=None):
     Returns:
         dict: SLE metrics including scores for various service categories
     """
-    site = site_id or SITE_ID
+    token, default_site = _get_config()
+    site = site_id or default_site
     url = f"{API_BASE}/sites/{site}/sle"
     logger.info(f"Fetching SLE metrics for site {site}")
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=_get_headers(token), timeout=30)
         response.raise_for_status()
         logger.info(f"Successfully retrieved SLE metrics")
         return response.json()
@@ -127,7 +141,8 @@ def get_sle_history(metric, start=None, end=None, site_id=None):
     Returns:
         dict: Historical SLE data
     """
-    site = site_id or SITE_ID
+    token, default_site = _get_config()
+    site = site_id or default_site
     url = f"{API_BASE}/sites/{site}/sle/{metric}/metrics"
     
     params = {}
@@ -139,7 +154,7 @@ def get_sle_history(metric, start=None, end=None, site_id=None):
     logger.info(f"Fetching SLE history for {metric}")
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response = requests.get(url, headers=_get_headers(token), params=params, timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -157,12 +172,13 @@ def get_wlan_list(site_id=None):
     Returns:
         list: List of WLAN configurations
     """
-    site = site_id or SITE_ID
+    token, default_site = _get_config()
+    site = site_id or default_site
     url = f"{API_BASE}/sites/{site}/wlans"
     logger.info(f"Fetching WLAN list for site {site}")
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=_get_headers(token), timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -182,12 +198,13 @@ def update_wlan(wlan_id, config, site_id=None):
     Returns:
         dict: Updated WLAN configuration
     """
-    site = site_id or SITE_ID
+    token, default_site = _get_config()
+    site = site_id or default_site
     url = f"{API_BASE}/sites/{site}/wlans/{wlan_id}"
     logger.info(f"Updating WLAN {wlan_id}")
     
     try:
-        response = requests.put(url, headers=headers, json=config, timeout=30)
+        response = requests.put(url, headers=_get_headers(token), json=config, timeout=30)
         response.raise_for_status()
         logger.info(f"Successfully updated WLAN {wlan_id}")
         return response.json()
@@ -222,15 +239,12 @@ def validate_credentials():
     Raises:
         ValueError: If credentials are missing or invalid
     """
-    if not TOKEN:
-        raise ValueError("MIST_API_TOKEN environment variable not set")
-    if not SITE_ID:
-        raise ValueError("SITE_ID environment variable not set")
-    
+    token, _ = _get_config()
+
     # Test credentials with a simple API call
     try:
         url = f"{API_BASE}/self"
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=_get_headers(token), timeout=10)
         response.raise_for_status()
         logger.info("Mist API credentials validated successfully")
         return True
