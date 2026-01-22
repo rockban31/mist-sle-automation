@@ -1,0 +1,118 @@
+# SLE Rules Configuration
+# Defines SLE thresholds, priority mappings, and remediation strategies
+
+sle_thresholds:
+  # SLE score thresholds for triggering automation
+  critical: 60  # Score below 60 = critical
+  high: 70      # Score below 70 = high
+  medium: 80    # Score below 80 = medium
+  low: 90       # Score below 90 = low
+
+sle_priority_map:
+  # Map SLE types to default severity levels
+  throughput:
+    default: high
+    score_below_60: critical
+  
+  successful-connects:
+    default: high
+    score_below_70: critical
+  
+  gateway-availability:
+    default: critical
+    score_below_80: critical
+  
+  dhcp-performance:
+    default: high
+    score_below_70: critical
+  
+  dns-performance:
+    default: medium
+    score_below_60: high
+
+remediation_strategies:
+  # Define remediation actions per SLE type
+  throughput:
+    - action: reboot
+      priority: 1
+      description: "Reboot AP to clear potential resource issues"
+    
+    - action: rrm
+      priority: 2
+      description: "Adjust radio resource management"
+  
+  successful-connects:
+    - action: reboot
+      priority: 1
+      description: "Reboot AP to reset connection state"
+    
+    - action: wlan_reset
+      priority: 2
+      description: "Reset WLAN configuration"
+  
+  gateway-availability:
+    - action: reboot
+      priority: 1
+      description: "Reboot AP to restore gateway connectivity"
+  
+  dhcp-performance:
+    - action: reboot
+      priority: 1
+      description: "Reboot AP to clear DHCP state"
+  
+  dns-performance:
+    - action: reboot
+      priority: 1
+      description: "Reboot AP to refresh DNS connectivity"
+
+guardrails:
+  # Safety limits for automation
+  min_clients: 3  # Minimum clients before remediation
+  min_reboot_interval: 1800  # Minimum seconds between reboots (30 min)
+  max_daily_reboots: 3  # Maximum reboots per AP per day
+  business_hours_only: false  # Only remediate during business hours
+  
+  business_hours:
+    start: "08:00"
+    end: "18:00"
+    timezone: "UTC"
+
+validation:
+  # Validation parameters
+  poll_interval: 60  # Seconds between SLE polls
+  max_attempts: 5  # Maximum validation attempts
+  timeout: 300  # Total timeout in seconds
+  threshold_score: 90  # Minimum score to consider restored
+  
+  escalation:
+    on_failure: true  # Escalate if validation fails
+    retry_count: 1  # Number of retries before escalation
+
+zendesk:
+  # Zendesk ticket configuration
+  default_priority: normal
+  default_type: incident
+  auto_close: true  # Auto-close on successful remediation
+  
+  tags:
+    - mist
+    - wireless
+    - sle
+    - automation
+  
+  priority_map:
+    critical: urgent
+    high: high
+    medium: normal
+    low: low
+
+monitoring:
+  # Metrics to track
+  track_mttr: true  # Mean Time To Remediate
+  track_mtta: true  # Mean Time To Acknowledge
+  track_success_rate: true  # Automation success rate
+  
+  splunk:
+    enabled: true
+    index: mist_automation
+    sourcetype: mist:sle:automation

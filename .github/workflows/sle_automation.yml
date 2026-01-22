@@ -1,0 +1,202 @@
+name: Mist SLE Proactive Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      ap_id:
+        description: 'Access Point ID'
+        required: true
+        type: string
+      sle:
+        description: 'SLE metric type (e.g., throughput, successful-connects)'
+        required: true
+        type: string
+      severity:
+        description: 'Severity level (critical, high, medium, low)'
+        required: true
+        type: string
+        default: 'high'
+      zendesk_ticket:
+        description: 'Existing Zendesk ticket ID (optional)'
+        required: false
+        type: string
+
+env:
+  MIST_API_TOKEN: ${{ secrets.MIST_API_TOKEN }}
+  SITE_ID: ${{ secrets.SITE_ID }}
+  ZENDESK_SUBDOMAIN: ${{ secrets.ZENDESK_SUBDOMAIN }}
+  ZENDESK_EMAIL: ${{ secrets.ZENDESK_EMAIL }}
+  ZENDESK_API_TOKEN: ${{ secrets.ZENDESK_API_TOKEN }}
+  ZENDESK_GROUP_ID: ${{ secrets.ZENDESK_GROUP_ID }}
+  SPLUNK_HEC_ENDPOINT: ${{ secrets.SPLUNK_HEC_ENDPOINT }}
+  SPLUNK_HEC_TOKEN: ${{ secrets.SPLUNK_HEC_TOKEN }}
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  proactive-sle-remediation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python 
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        pip install requests pyyaml
+        pip list
+
+    - name: Create Zendesk Ticket
+      id: create_ticket
+      if: ${{ !github.event.inputs.zendesk_ticket }}
+      run: |
+        python src/zendesk.py \
+          --ap_id "${{ github.event.inputs.ap_id }}" \
+          --sle "${{ github.event.inputs.sle }}" \
+          --severity "${{ github.event.inputs.severity }}" \
+          --action create > ticket_output.json
+        
+        TICKET_ID=$(cat ticket_output.json | jq -r '.ticket.id')
+        echo "ticket_id=$TICKET_ID" >> $GITHUB_OUTPUT
+        echo "Created Zendesk ticket #$TICKET_ID"
+
+    - name: Set Ticket ID
+      id: ticket
+      run: |
+        if [ -n "${{ github.event.inputs.zendesk_ticket }}" ]; then
+          echo "ticket_id=${{ github.event.inputs.zendesk_ticket }}" >> $GITHUB_OUTPUT
+        else
+          echo "ticket_id=${{ steps.create_ticket.outputs.ticket_id }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run Diagnostics
+      id: diagnostics
+      continue-on-error: true
+      run: |
+        python src/diagnostics.py \
+          --ap_id "${{ github.event.inputs.ap_id }}" \
+          --sle "${{ github.event.inputs.sle }}" \
+          --output diagnostics.json
+        
+        cat diagnostics.json
+        echo "diagnostics_complete=true" >> $GITHUB_OUTPUT
+
+    - name: Update Ticket - Diagnostics Complete
+      if: steps.diagnostics.outcome == 'success'
+      run: |
+        python src/zendesk.py \
+          --ticket "${{ steps.ticket.outputs.ticket_id }}" \
+          --action update \
+          --comment "Diagnostics completed. AP analysis in progress. Client count: $(cat diagnostics.json | jq -r '.client_count')"
+
+    - name: Execute Remediation
+      id: remediation
+      continue-on-error: true
+      run: |
+        python src/remediation.py \
+          --ap_id "${{ github.event.inputs.ap_id }}" \
+          --sle "${{ github.event.inputs.sle }}" \
+          --output remediation.json
+        
+        cat remediation.json
+        
+        REMEDIATION_STATUS=$(cat remediation.json | jq -r '.status')
+        echo "status=$REMEDIATION_STATUS" >> $GITHUB_OUTPUT
+
+    - name: Update Ticket - Remediation Executed
+      if: steps.remediation.outputs.status == 'success'
+      run: |
+        python src/zendesk.py \
+          --ticket "${{ steps.ticket.outputs.ticket_id }}" \
+          --action update \
+          --comment "Remediation executed: AP reboot initiated. Waiting for stabilization and SLE validation."
+
+    - name: Update Ticket - Remediation Blocked
+      if: steps.remediation.outputs.status == 'blocked'
+      run: |
+        REASON=$(cat remediation.json | jq -r '.reason')
+        python src/zendesk.py \
+          --ticket "${{ steps.ticket.outputs.ticket_id }}" \
+          --action update \
+          --comment "Remediation blocked by guardrails: $REASON. Manual investigation required."
+
+    - name: Validate SLE Restoration
+      id: validation
+      if: steps.remediation.outputs.status == 'success'
+      continue-on-error: true
+      run: |
+        python src/validation.py \
+          --ap_id "${{ github.event.inputs.ap_id }}" \
+          --sle "${{ github.event.inputs.sle }}" \
+          --output validation.json
+        
+        cat validation.json
+        
+        VALIDATION_STATUS=$(cat validation.json | jq -r '.overall_status')
+        echo "status=$VALIDATION_STATUS" >> $GITHUB_OUTPUT
+
+    - name: Close Ticket - Success
+      if: steps.validation.outputs.status == 'success'
+      run: |
+        SCORE=$(cat validation.json | jq -r '.sle_validation.final_score')
+        python src/zendesk.py \
+          --ticket "${{ steps.ticket.outputs.ticket_id }}" \
+          --action close \
+          --comment "SLE metrics successfully restored. Final score: $SCORE. Issue resolved via automation. MTTR significantly reduced."
+
+    - name: Update Ticket - Validation Failed
+      if: steps.validation.outputs.status == 'failed' || steps.validation.outcome == 'failure'
+      run: |
+        python src/zendesk.py \
+          --ticket "${{ steps.ticket.outputs.ticket_id }}" \
+          --action update \
+          --comment "SLE validation failed after remediation. Escalating to network operations team for manual investigation."
+
+    - name: Audit to Splunk
+      if: always()
+      run: |
+        # Determine overall workflow status
+        if [ "${{ steps.validation.outputs.status }}" == "success" ]; then
+          WORKFLOW_STATUS="success"
+        elif [ "${{ steps.remediation.outputs.status }}" == "blocked" ]; then
+          WORKFLOW_STATUS="blocked"
+        else
+          WORKFLOW_STATUS="failed"
+        fi
+        
+        python src/splunk.py \
+          --ap_id "${{ github.event.inputs.ap_id }}" \
+          --sle "${{ github.event.inputs.sle }}" \
+          --status "$WORKFLOW_STATUS"
+
+    - name: Upload Artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: remediation-results-${{ github.event.inputs.ap_id }}
+        path: |
+          diagnostics.json
+          remediation.json
+          validation.json
+          ticket_output.json
+        retention-days: 30
+
+    - name: Workflow Summary
+      if: always()
+      run: |
+        echo "## 🔧 Mist SLE Automation Workflow Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Access Point:** ${{ github.event.inputs.ap_id }}" >> $GITHUB_STEP_SUMMARY
+        echo "**SLE Metric:** ${{ github.event.inputs.sle }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Severity:** ${{ github.event.inputs.severity }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Zendesk Ticket:** #${{ steps.ticket.outputs.ticket_id }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Workflow Steps" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Diagnostics: ${{ steps.diagnostics.outcome }}" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Remediation: ${{ steps.remediation.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Validation: ${{ steps.validation.outputs.status }}" >> $GITHUB_STEP_SUMMARY
